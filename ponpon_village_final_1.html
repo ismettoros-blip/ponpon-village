@@ -2570,6 +2570,10 @@ function outerLoop(){
   cy=Math.max(0,Math.min(1600-vh/z,cy));
   world.style.transform=`scale(${z}) translate(${-cx}px,${-cy}px)`;
   world.style.transformOrigin='top left';
+  // Firebase presence — her ~3sn
+  if(typeof _fbFrame === "undefined") window._fbFrame=0;
+  window._fbFrame++;
+  if(window._fbFrame % 180 === 0 && typeof fbUpdatePresence === "function") fbUpdatePresence();
   requestAnimationFrame(outerLoop);
 }
 
@@ -2794,7 +2798,9 @@ function saveChats(msgs){
 }
 
 // ── Presence (online oyuncular) ──────────────────────────
-function updatePresence(){
+function updatePresence(){ // Firebase ile değiştirildi — fbUpdatePresence kullanılıyor
+  if(typeof fbUpdatePresence === "function") fbUpdatePresence(); return;
+  const _old_start = true;
   if(!G.name) return;
   try{
     const p = JSON.parse(localStorage.getItem(PRESENCE_KEY)||'{}');
@@ -2825,23 +2831,16 @@ function toggleChat(){
 }
 
 function sendChat(){
-  if(!G.name){ nfy('Önce giriş yapmalısın!'); return; }
   const inp = document.getElementById('chatInput');
-  const txt = inp.value.trim();
-  if(!txt) return;
+  if(!inp) return;
+  const msg = inp.value.trim();
+  if(!msg) return;
+  if(typeof fbSendChat === 'function'){
+    fbSendChat(msg);
+  } else {
+    appendChatMsg(G.name, msg);
+  }
   inp.value = '';
-  const msgs = getChats();
-  msgs.push({
-    id: Date.now() + Math.random().toString(36).slice(2,6),
-    user: G.name,
-    text: txt,
-    ts: Date.now(),
-    mod: isAdmin(),
-    deleted: false
-  });
-  saveChats(msgs);
-  renderChatMsgs();
-  playSFX('notify');
 }
 
 function renderChatMsgs(){
@@ -3136,6 +3135,7 @@ function modQuickAnnounce(txt){
 // ── Giriş sonrası chat + mod butonlarını aktif et ─────────
 function activateChatAndMod(){
   setTimeout(questLoad,600);
+  setTimeout(fbInit, 1000);
   const chatBtn = document.getElementById('chatBtn');
   if(chatBtn) chatBtn.style.display = 'flex';
   // Enter ile mesaj gönder - DOM hazır olunca bağla
@@ -3425,7 +3425,6 @@ function centerCamOnPlayer(){
 /* ============================================================
    SOKAK LAMBALARI
    ============================================================ */
-let _lampsOn = false;
 
 function updateStreetLamps(mins){
   // 19:30 = 1170 dk sonra aç, 07:00 = 420 dk sonra kapat
@@ -3448,5 +3447,115 @@ setTimeout(()=>{
   document.getElementById('regName').focus();
 }, 300);
 </script>
+
+<!-- ══ FIREBASE BACKEND ══ -->
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+<script>
+// Firebase başlat
+const firebaseConfig = {
+  apiKey: "AIzaSyDsAdEfSwq5l2fshz_dESFvrzLDmqp8yz4",
+  authDomain: "ponpon-village-6df60.firebaseapp.com",
+  databaseURL: "https://ponpon-village-6df60-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "ponpon-village-6df60",
+  storageBucket: "ponpon-village-6df60.firebasestorage.app",
+  messagingSenderId: "966601142719",
+  appId: "1:966601142719:web:a561f241d6a3357942710a"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ── PRESENCE SİSTEMİ ──────────────────────────────────────
+// Oyuncunun konumunu Firebase'e yaz
+function fbUpdatePresence(){
+  if(!G.name) return;
+  db.ref('players/' + G.name).set({
+    x: Math.round(G.cx),
+    y: Math.round(G.cy),
+    lv: G.lv,
+    ts: firebase.database.ServerValue.TIMESTAMP,
+    emoji: '😊'
+  });
+}
+
+// Sayfadan çıkınca sil
+window.addEventListener('beforeunload', ()=>{
+  if(G.name) db.ref('players/' + G.name).remove();
+});
+
+// Diğer oyuncuları dinle
+const _fbPlayers = {};
+function fbListenPlayers(){
+  db.ref('players').on('value', snap=>{
+    const data = snap.val() || {};
+    const now = Date.now();
+    // Eski oyuncuları temizle
+    Object.keys(_fbPlayers).forEach(name=>{
+      if(!data[name]){
+        const el = document.getElementById('fp_'+name);
+        if(el) el.remove();
+        delete _fbPlayers[name];
+      }
+    });
+    // Aktif oyuncuları güncelle
+    Object.entries(data).forEach(([name, p])=>{
+      if(name === G.name) return; // Kendini gösterme
+      const world = document.getElementById('world');
+      if(!world) return;
+      let el = document.getElementById('fp_'+name);
+      if(!el){
+        el = document.createElement('div');
+        el.id = 'fp_' + name;
+        el.style.cssText = 'position:absolute;z-index:90;pointer-events:none;display:flex;flex-direction:column;align-items:center;transition:left 0.5s linear,top 0.5s linear;';
+        const color = nameToColor(name);
+        const emoji = nameToEmoji(name);
+        const short = name.length>10 ? name.slice(0,9)+'…' : name;
+        el.innerHTML = `
+          <div style="background:${color};color:white;font-family:'Baloo 2',cursive;font-size:9px;font-weight:800;padding:2px 7px;border-radius:8px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3);">${short} Lv.${p.lv||1}</div>
+          <div style="width:28px;height:34px;display:flex;flex-direction:column;align-items:center;margin-top:3px;">
+            <div style="width:20px;height:20px;background:#ffd5b8;border-radius:50%;border:2px solid #e8a87c;display:flex;align-items:center;justify-content:center;font-size:11px;">${emoji}</div>
+            <div style="width:16px;height:14px;background:${color};border-radius:3px 3px 4px 4px;margin-top:-2px;"></div>
+          </div>`;
+        world.appendChild(el);
+        _fbPlayers[name] = el;
+      }
+      el.style.left = (p.x - 14) + 'px';
+      el.style.top  = (p.y - 56) + 'px';
+    });
+  });
+}
+
+// ── CHAT SİSTEMİ (Firebase) ───────────────────────────────
+function fbSendChat(msg){
+  if(!G.name || !msg.trim()) return;
+  db.ref('chat').push({
+    name: G.name,
+    msg: msg.trim(),
+    ts: firebase.database.ServerValue.TIMESTAMP
+  });
+}
+
+function fbListenChat(){
+  // Son 50 mesajı dinle
+  db.ref('chat').limitToLast(50).on('child_added', snap=>{
+    const d = snap.val();
+    if(!d) return;
+    appendChatMsg(d.name, d.msg);
+  });
+}
+
+// ── BAŞLAT ───────────────────────────────────────────────
+// Giriş yapınca Firebase'e bağlan
+function fbInit(){
+  if(!G.name) return;
+  fbListenPlayers();
+  fbListenChat();
+  // Her 3 saniyede konum güncelle
+  setInterval(fbUpdatePresence, 3000);
+  fbUpdatePresence(); // İlk güncelleme
+  console.log('🔥 Firebase bağlandı:', G.name);
+}
+</script>
+
 </body>
 </html>
